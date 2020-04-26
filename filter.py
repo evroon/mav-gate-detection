@@ -174,20 +174,24 @@ class detection:
     def plot(self):
         plot_data = np.load('plot_data.npy')
 
-        x = [item[0] for item in plot_data]
-        y = [item[1] for item in plot_data]
+        x = np.array([item[0] for item in plot_data])
+        y = np.array([item[1] for item in plot_data])
 
-        plt.plot(x, y, ls='', marker='o')
-        plt.title('ROC (TPR versus FPR)')
+        # Apply window
+        bins = np.linspace(0, np.max(x[x <= 1.0]), 20)
+        avg_std = np.zeros((len(bins), 4))
+
+        for i in range(1, len(bins)):
+            data = np.where(np.logical_and(x > bins[i - 1], x <= bins[i]))
+            avg_std[i, :] = [np.average(x[data]), np.average(y[data]),
+                             np.std(y[data]), np.std(x[data])]
+
+        avg_std = avg_std[avg_std[:, 0] <= 1.0, :]
+        plt.errorbar(avg_std[:, 0], avg_std[:, 1], avg_std[:, 2], avg_std[:, 3], marker='o', markersize=4, capsize=3, ecolor='b', barsabove=False, color='b')
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
         plt.grid()
-        # plt.hist(np.array(ious), bins=np.linspace(0, 100, 50))
-        # plt.grid()
         plt.savefig('roc', bbox_inches='tight')
-
-
-
 
 det = detection()
 det.process()
