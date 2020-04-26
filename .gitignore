@@ -1,2 +1,6 @@
 results
 WashingtonOBRace
+gen_train_images
+.vscode
+__pycache__
+log.out
