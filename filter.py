@@ -3,56 +3,51 @@ import cv2
 import imageio
 from matplotlib import pyplot as plt
 from PIL import Image, ImageDraw
-
-
-MIN_MATCH_COUNT = 10
+import warnings
+import timeit
 
 
 class detection:
     def apply_filter(self, img):
-        ''' Create the filter mask and apply it to the image '''
-        center_blue = np.uint8([[[255, 115, 0]]])
-
+        ''' Create the filter mask to filter the sides of the gates and apply it to the image. '''
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        center_blue = cv2.cvtColor(center_blue, cv2.COLOR_BGR2HSV)
 
-        upper_blue = center_blue + np.array([10, 100, 100])
-        lower_blue = center_blue - np.array([10, 110, 110])
-
-        mask = cv2.inRange(hsv, lower_blue, upper_blue)
-        img = cv2.bitwise_and(img, img, mask=mask)
-
-        # img = cv2.GaussianBlur(img, (25, 25), 0)
+        lower_blue = np.array([96, 145, 145])
+        upper_blue = np.array([116, 255, 255])
 
         mask = cv2.inRange(hsv, lower_blue, upper_blue)
         img = cv2.bitwise_and(img, img, mask=mask)
-        return img
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    def detect_gate(self, train_index=265):
-        self.train_index = train_index
 
-        img = cv2.imread('WashingtonOBRace/img_{}.png'.format(self.train_index))
-        mask = cv2.imread('WashingtonOBRace/mask_{}.png'.format(self.train_index))
+    def detect_gate(self, image_index=265):
+        '''
+        Detect the gates in the image given by image_index.
+
+        Returns the original image with gates segmented in red.
+        '''
+
+        img = cv2.imread('WashingtonOBRace/img_{}.png'.format(image_index))
 
         if not isinstance(img, np.ndarray):
             return False, np.nan, np.nan
 
-        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        if self.save_output:
+            mask = cv2.imread('WashingtonOBRace/mask_{}.png'.format(image_index))
+            mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
 
-        img = self.apply_filter(img)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        filtered_img = self.apply_filter(img)
 
-        _, threshold = cv2.threshold(img, 50, 100, 0)
+        _, threshold = cv2.threshold(filtered_img, 50, 100, 0)
         contours, _ = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        img = cv2.imread('WashingtonOBRace/img_{}.png'.format(self.train_index))
-
         pillars = []
-        true_positives = 0
-        false_positives = 0
 
         for contour in contours:
             width = np.max(contour[:, 0, 0]) - np.min(contour[:, 0, 0])
             height = np.max(contour[:, 0, 1]) - np.min(contour[:, 0, 1])
+
+            if height < 1.7 * width:
+                continue
 
             heighest = np.argmax(contour[:, 0, 1])
             lowest = np.argmin(contour[:, 0, 1])
@@ -67,25 +62,18 @@ class detection:
             bottom_extrapolated = center_outer - parallel
             top_extrapolated = center_outer + parallel
 
-            # cv2.drawContours(img, [contour], -1, (0,255,0), 3)
-
-            # if np.any(bottom_extrapolated < 0.0) or np.any(top_extrapolated < 0.0):
-            #     continue
-
-            # Right pillar has outer edge right from center
+            # Right pillar has an outer edge right from center
             left_pillar = top_outer[0] < center_x
 
             top_extrapolated = (int(top_extrapolated[0]), int(top_extrapolated[1]))
             bottom_extrapolated = (int(bottom_extrapolated[0]), int(bottom_extrapolated[1]))
 
-            # img[bottom_extrapolated[1]:top_extrapolated[1], bottom_extrapolated[0]:top_extrapolated[0], :] = [0, 255, 0]
-
             pillars.append([left_pillar, top_extrapolated, bottom_extrapolated, height])
 
-        used_right_pillars = []
-        color = (0, 0, 255)
-
         output_img = np.zeros((img.shape[0], img.shape[1]))
+        true_positives = 0
+        false_positives = 0
+        used_right_pillars = []
 
         for i in range(len(pillars)):
             leftpillar = pillars[i]
@@ -95,6 +83,7 @@ class detection:
 
             topleft = np.array(leftpillar[1])
             bottomleft = np.array(leftpillar[2])
+            height = topleft[1] - bottomleft[1]
 
             if leftpillar[0]:
                 for j in range(0, len(pillars)):
@@ -115,12 +104,12 @@ class detection:
                         bottomright_inner = bottomright + (topleft - bottomright) * 0.15
 
                         width = bottomright[0] - bottomleft[0]
-                        height = topleft[1] - bottomleft[1]
 
+                        # Ignore "gates" that are too small.
                         if width < 30:
                             continue
 
-                        # Calculate lengths of outer edges
+                        # Calculate lengths of outer edges.
                         edge_length = np.zeros(4)
                         edge_length[0] = np.sqrt(np.sum((topright - topleft) ** 2))
                         edge_length[1] = np.sqrt(np.sum((topleft - bottomleft) ** 2))
@@ -138,63 +127,90 @@ class detection:
                 if len(penalties) < 1 or np.min(penalties) > 0.15:
                     continue
 
+                # Determine which pillar matches best to the left pillar.
                 best_match = np.argmin(penalties)
                 polygon_outer = outer_polygons[best_match]
                 polygon_inner = inner_polygons[best_match]
 
-                draw_img = Image.new('L', img.shape[1::-1], 0)
-                draw = ImageDraw.Draw(draw_img)
-                draw.polygon(polygon_outer, outline=1, fill=1)
-                draw.polygon(polygon_inner, outline=1, fill=0)
-                draw_img = np.array(draw_img)
+                if self.save_output:
+                    draw_img = Image.new('L', img.shape[1::-1], 0)
+                    draw = ImageDraw.Draw(draw_img)
+                    draw.polygon(polygon_outer, outline=1, fill=1)
+                    draw.polygon(polygon_inner, outline=1, fill=0)
+                    draw_img = np.array(draw_img)
 
-                output_img = output_img + draw_img
-                img[np.array(draw_img) == 1, :] = [0, 0, 255]
+                    output_img = output_img + draw_img
+                    img[np.array(draw_img) == 1, :] = [0, 0, 255]
 
-        output_img[output_img > 1] = 1
-        true_positives += np.sum(output_img * mask)
-        false_positives += np.sum(output_img * (255 - mask))
 
-        return img, true_positives / np.sum(mask), false_positives / np.sum(255 - mask)
+        if self.save_output:
+            output_img[output_img > 1] = 1
+            true_positives += np.sum(output_img * mask)
+            false_positives += np.sum(output_img * (255 - mask))
+            return img, true_positives / np.sum(mask), false_positives / np.sum(255 - mask)
 
-    def process(self, img_list=None):
+        return img, np.nan, np.nan
+
+    def process(self, img_list=None, save_output=True):
+        ''' Process a list of images and output the resulting segmented images '''
+        self.save_output = save_output
         plot_data = []
 
         if img_list == None:
-            img_list = range(500)
+            img_list = range(439)
+
+        start = timeit.default_timer()
 
         for image in img_list:
             img, TPR, FPR = det.detect_gate(image)
             plot_data.append((FPR, TPR))
 
-            if not isinstance(img, bool):
+            if self.save_output and not isinstance(img, bool):
                 cv2.imwrite('results/result_{}.png'.format(str(image)), img)
+
+        stop = timeit.default_timer()
+        print('Computation time: ', stop - start, 's')
+        print('Computation time per image: ', (stop - start) / 308 * 1e3, 'ms')
 
         np.save('plot_data', plot_data)
 
 
     def plot(self):
+        ''' Plot the ROC curve '''
+
+        if not self.save_output:
+            return
+
+        # Ignore warnings about nan values.
+        warnings.filterwarnings('ignore')
+
+        # Load data
         plot_data = np.load('plot_data.npy')
 
         x = np.array([item[0] for item in plot_data])
         y = np.array([item[1] for item in plot_data])
 
-        # Apply window
+        # Cluster/window the data into bins to make plot more readble.
         bins = np.linspace(0, np.max(x[x <= 1.0]), 20)
         avg_std = np.zeros((len(bins), 4))
 
         for i in range(1, len(bins)):
             data = np.where(np.logical_and(x > bins[i - 1], x <= bins[i]))
-            avg_std[i, :] = [np.average(x[data]), np.average(y[data]),
-                             np.std(y[data]), np.std(x[data])]
+            avg_std[i, :] = [
+                np.average(x[data]), np.average(y[data]),
+                np.std(y[data]), np.std(x[data])
+            ]
 
         avg_std = avg_std[avg_std[:, 0] <= 1.0, :]
-        plt.errorbar(avg_std[:, 0], avg_std[:, 1], avg_std[:, 2], avg_std[:, 3], marker='o', markersize=4, capsize=3, ecolor='b', barsabove=False, color='b')
+        plt.errorbar(avg_std[:, 0], avg_std[:, 1], avg_std[:, 2], avg_std[:, 3],
+            marker='o', markersize=4, capsize=3, ecolor='b', barsabove=False, color='b')
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
         plt.grid()
         plt.savefig('roc', bbox_inches='tight')
 
+        print('Number of images with no gates detected: {}'.format(np.sum(x == 0)))
+
 det = detection()
-det.process()
+det.process(None, False)
 det.plot()
