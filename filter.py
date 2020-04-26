@@ -42,7 +42,7 @@ class detection:
         img = self.apply_filter(img)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        _, threshold = cv2.threshold(img, 10, 100, 0)
+        _, threshold = cv2.threshold(img, 50, 100, 0)
         contours, _ = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         img = cv2.imread('WashingtonOBRace/img_{}.png'.format(self.train_index))
 
@@ -54,30 +54,33 @@ class detection:
             width = np.max(contour[:, 0, 0]) - np.min(contour[:, 0, 0])
             height = np.max(contour[:, 0, 1]) - np.min(contour[:, 0, 1])
 
-            if height > 2 * width:
-                heighest = np.argmax(contour[:, 0, 1])
-                lowest = np.argmin(contour[:, 0, 1])
+            heighest = np.argmax(contour[:, 0, 1])
+            lowest = np.argmin(contour[:, 0, 1])
 
-                top_outer = np.array([contour[heighest, 0, 0], contour[heighest, 0, 1]], dtype=np.float)
-                bottom_outer = np.array([contour[lowest, 0, 0], contour[lowest, 0, 1]], dtype=np.float)
+            top_outer = np.array([contour[heighest, 0, 0], contour[heighest, 0, 1]], dtype=np.float)
+            bottom_outer = np.array([contour[lowest, 0, 0], contour[lowest, 0, 1]], dtype=np.float)
 
-                center_outer = 0.5 * (top_outer + bottom_outer)
-                center_x = 0.5 * (np.min(contour[:, 0, 0]) + np.max(contour[:, 0, 0]))
+            center_outer = 0.5 * (top_outer + bottom_outer)
+            center_x = 0.5 * (np.min(contour[:, 0, 0]) + np.max(contour[:, 0, 0]))
 
-                parallel = top_outer - bottom_outer
-                bottom_extrapolated = center_outer - parallel
-                top_extrapolated = center_outer + parallel
+            parallel = top_outer - bottom_outer
+            bottom_extrapolated = center_outer - parallel
+            top_extrapolated = center_outer + parallel
 
-                left_pillar = True
+            # cv2.drawContours(img, [contour], -1, (0,255,0), 3)
 
-                # Right pillar has outer edge right from center
-                left_pillar = top_outer[0] < center_x
+            # if np.any(bottom_extrapolated < 0.0) or np.any(top_extrapolated < 0.0):
+            #     continue
 
-                top_extrapolated = (int(top_extrapolated[0]), int(top_extrapolated[1]))
-                bottom_extrapolated = (int(bottom_extrapolated[0]), int(bottom_extrapolated[1]))
+            # Right pillar has outer edge right from center
+            left_pillar = top_outer[0] < center_x
 
+            top_extrapolated = (int(top_extrapolated[0]), int(top_extrapolated[1]))
+            bottom_extrapolated = (int(bottom_extrapolated[0]), int(bottom_extrapolated[1]))
 
-                pillars.append([left_pillar, top_extrapolated, bottom_extrapolated, height])
+            # img[bottom_extrapolated[1]:top_extrapolated[1], bottom_extrapolated[0]:top_extrapolated[0], :] = [0, 255, 0]
+
+            pillars.append([left_pillar, top_extrapolated, bottom_extrapolated, height])
 
         used_right_pillars = []
         color = (0, 0, 255)
@@ -86,6 +89,12 @@ class detection:
 
         for i in range(len(pillars)):
             leftpillar = pillars[i]
+            penalties = []
+            outer_polygons = []
+            inner_polygons = []
+
+            topleft = np.array(leftpillar[1])
+            bottomleft = np.array(leftpillar[2])
 
             if leftpillar[0]:
                 for j in range(0, len(pillars)):
@@ -97,8 +106,6 @@ class detection:
                         rightpillar[3] < 1.25 * leftpillar[3] and \
                         rightpillar[3] > 0.75 * leftpillar[3]:
 
-                        topleft = np.array(leftpillar[1])
-                        bottomleft = np.array(leftpillar[2])
                         topright = np.array(rightpillar[1])
                         bottomright = np.array(rightpillar[2])
 
@@ -110,6 +117,9 @@ class detection:
                         width = bottomright[0] - bottomleft[0]
                         height = topleft[1] - bottomleft[1]
 
+                        if width < 30:
+                            continue
+
                         # Calculate lengths of outer edges
                         edge_length = np.zeros(4)
                         edge_length[0] = np.sqrt(np.sum((topright - topleft) ** 2))
@@ -117,40 +127,29 @@ class detection:
                         edge_length[2] = np.sqrt(np.sum((bottomleft - bottomright) ** 2))
                         edge_length[3] = np.sqrt(np.sum((bottomright - topright) ** 2))
 
-                        if (topleft[0] < 2 and bottomleft[0] < 2) or \
-                            width < 30 or \
-                            width > height * 20 or \
-                            width < height // 20 or \
-                            np.absolute(topleft[1] - topright[1]) > 35 or \
-                            np.std(edge_length) > 20:
-                            continue
+                        penalty = np.std(edge_length) / np.average(edge_length)
 
                         used_right_pillars.append(j)
+                        penalties.append(penalty)
+                        outer_polygons.append([*bottomleft, *topleft, *topright, *bottomright])
+                        inner_polygons.append([*bottomleft_inner, *topleft_inner, *topright_inner, *bottomright_inner])
 
-        for i in pillars:
-            if i[0]:
-                leftpillar = i
-                for j in pillars:
-                    if not j[0] and j[3] < 1.25 * i[3] and j[3] > 0.75 * i[3]:
-                        rightpillar = j
+                penalties = np.array(penalties)
+                if len(penalties) < 1 or np.min(penalties) > 0.15:
+                    continue
 
-                        topleft = leftpillar[1]
-                        bottomleft = leftpillar[2]
-                        topright = rightpillar[1]
-                        bottomright = rightpillar[2]
+                best_match = np.argmin(penalties)
+                polygon_outer = outer_polygons[best_match]
+                polygon_inner = inner_polygons[best_match]
 
-                        polygon_outer = [*bottomleft, *topleft, *topright, *bottomright]
-                        polygon_inner = [*bottomleft_inner, *topleft_inner, *topright_inner, *bottomright_inner]
+                draw_img = Image.new('L', img.shape[1::-1], 0)
+                draw = ImageDraw.Draw(draw_img)
+                draw.polygon(polygon_outer, outline=1, fill=1)
+                draw.polygon(polygon_inner, outline=1, fill=0)
+                draw_img = np.array(draw_img)
 
-                        draw_img = Image.new('L', img.shape[1::-1], 0)
-                        draw = ImageDraw.Draw(draw_img)
-                        draw.polygon(polygon_outer, outline=1, fill=1)
-                        draw.polygon(polygon_inner, outline=1, fill=0)
-                        draw_img = np.array(draw_img)
-
-                        output_img = output_img + draw_img
-
-                        img[np.array(draw_img) == 1, :] = [0, 0, 255]
+                output_img = output_img + draw_img
+                img[np.array(draw_img) == 1, :] = [0, 0, 255]
 
         output_img[output_img > 1] = 1
         true_positives += np.sum(output_img * mask)
@@ -158,10 +157,13 @@ class detection:
 
         return img, true_positives / np.sum(mask), false_positives / np.sum(255 - mask)
 
-    def process(self):
+    def process(self, img_list=None):
         plot_data = []
 
-        for image in range(500):
+        if img_list == None:
+            img_list = range(500)
+
+        for image in img_list:
             img, TPR, FPR = det.detect_gate(image)
             plot_data.append((FPR, TPR))
 

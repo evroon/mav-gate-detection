@@ -4,3 +4,4 @@ gen_train_images
 .vscode
 __pycache__
 log.out
+plot_data.npy
