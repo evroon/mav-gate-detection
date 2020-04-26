@@ -9,5 +9,7 @@ The Python dependencies can be installed using:
 pip3 install numpy opencv-python imageio matplotlib pillow
 ```
 
+The code can be run simply by using: `python3 main.py`
+
 A dataset containing images must be put in the root folder in a directory called `WashingtonOBRace`. The images must be called `gate_*.png` and `mask_*.png` for the gates and masks, respectively.
 The output images will be stored in the `results` directory.
