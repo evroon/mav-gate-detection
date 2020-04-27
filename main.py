@@ -5,9 +5,14 @@ from matplotlib import pyplot as plt
 from PIL import Image, ImageDraw
 import warnings
 import timeit
+import os
 
 
 class detection:
+    def __init__(self, save_output=True):
+        self.save_output = save_output
+
+
     def apply_filter(self, img):
         ''' Create the filter mask to filter the sides of the gates and apply it to the image. '''
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -20,7 +25,7 @@ class detection:
         return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 
-    def detect_gate(self, image_index=265):
+    def detect_gate(self, image_index=265, threshold=0.15):
         '''
         Detect the gates in the image given by image_index.
 
@@ -38,8 +43,8 @@ class detection:
 
         filtered_img = self.apply_filter(img)
 
-        _, threshold = cv2.threshold(filtered_img, 50, 100, 0)
-        contours, _ = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        _, threshold_img = cv2.threshold(filtered_img, 50, 100, 0)
+        contours, _ = cv2.findContours(threshold_img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         pillars = []
 
         for contour in contours:
@@ -71,8 +76,6 @@ class detection:
             pillars.append([left_pillar, top_extrapolated, bottom_extrapolated, height])
 
         output_img = np.zeros((img.shape[0], img.shape[1]))
-        true_positives = 0
-        false_positives = 0
         used_right_pillars = []
 
         for i in range(len(pillars)):
@@ -124,7 +127,7 @@ class detection:
                         inner_polygons.append([*bottomleft_inner, *topleft_inner, *topright_inner, *bottomright_inner])
 
                 penalties = np.array(penalties)
-                if len(penalties) < 1 or np.min(penalties) > 0.15:
+                if len(penalties) < 1 or np.min(penalties) > threshold:
                     continue
 
                 # Determine which pillar matches best to the left pillar.
@@ -145,34 +148,35 @@ class detection:
 
         if self.save_output:
             output_img[output_img > 1] = 1
-            true_positives += np.sum(output_img * mask)
-            false_positives += np.sum(output_img * (255 - mask))
+            true_positives = np.sum(output_img * mask)
+            false_positives = np.sum(output_img * (255 - mask))
             return img, true_positives / np.sum(mask), false_positives / np.sum(255 - mask)
 
         return img, np.nan, np.nan
 
-    def process(self, img_list=None, save_output=True):
+    def process(self, img_list=None, thresholds=[0.15]):
         ''' Process a list of images and output the resulting segmented images '''
-        self.save_output = save_output
-        plot_data = []
 
-        if img_list == None:
-            img_list = range(439)
+        for threshold in thresholds:
+            plot_data = []
 
-        start = timeit.default_timer()
+            if img_list == None:
+                img_list = range(439)
 
-        for image in img_list:
-            img, TPR, FPR = det.detect_gate(image)
-            plot_data.append((FPR, TPR))
+            start = timeit.default_timer()
 
-            if self.save_output and not isinstance(img, bool):
-                cv2.imwrite('results/result_{}.png'.format(str(image)), img)
+            for image in img_list:
+                img, TPR, FPR = det.detect_gate(image, threshold)
+                plot_data.append((FPR, TPR))
 
-        stop = timeit.default_timer()
-        print('Computation time: ', stop - start, 's')
-        print('Computation time per image: ', (stop - start) / 308 * 1e3, 'ms')
+                if self.save_output and not isinstance(img, bool):
+                    cv2.imwrite('results/result_{}.png'.format(str(image)), img)
 
-        np.save('plot_data', plot_data)
+            stop = timeit.default_timer()
+            # print('Computation time: ', stop - start, 's')
+            print('Computation time per image: ', (stop - start) / 308 * 1e3, 'ms')
+
+            np.save('results/data_{:.2f}'.format(threshold), plot_data)
 
 
     def plot(self):
@@ -181,36 +185,52 @@ class detection:
         if not self.save_output:
             return
 
-        # Ignore warnings about nan values.
-        warnings.filterwarnings('ignore')
+        for threshold in thresholds:
+            # Ignore warnings about nan values.
+            warnings.filterwarnings('ignore')
 
-        # Load data
-        plot_data = np.load('plot_data.npy')
+            data_file = 'results/data_{:.2f}.npy'.format(threshold)
 
-        x = np.array([item[0] for item in plot_data])
-        y = np.array([item[1] for item in plot_data])
+            # Load data
+            plot_data = np.load(data_file)
 
-        # Cluster/window the data into bins to make plot more readble.
-        bins = np.linspace(0, np.max(x[x <= 1.0]), 20)
-        avg_std = np.zeros((len(bins), 4))
+            x = np.array([item[0] for item in plot_data])
+            y = np.array([item[1] for item in plot_data])
 
-        for i in range(1, len(bins)):
-            data = np.where(np.logical_and(x > bins[i - 1], x <= bins[i]))
-            avg_std[i, :] = [
-                np.average(x[data]), np.average(y[data]),
-                np.std(y[data]), np.std(x[data])
-            ]
+            # Cluster/window the data into bins to make plot more readble.
+            bins = np.zeros(22)
+            bins[:4] = np.linspace(0, 0.01, 4)
+            bins[4:] = np.linspace(0.02, np.max(x[x <= 1.0]), 18)
+            avg_std = np.zeros((len(bins), 4))
 
-        avg_std = avg_std[avg_std[:, 0] <= 1.0, :]
-        plt.errorbar(avg_std[:, 0], avg_std[:, 1], avg_std[:, 2], avg_std[:, 3],
-            marker='o', markersize=4, capsize=3, ecolor='b', barsabove=False, color='b')
+            for i in range(1, len(bins)):
+                data = np.where(np.logical_and(x > bins[i - 1], x <= bins[i]))
+                avg_std[i, :] = [
+                    np.average(x[data]), np.average(y[data]),
+                    np.std(y[data]), np.std(x[data])
+                ]
+
+            no_gates_count = np.sum(x == 0)
+            label = 'threshold: {:2.2f}, {:3} images without detections'.format(threshold, no_gates_count)
+
+            avg_std = avg_std[avg_std[:, 0] <= 1.0, :]
+
+            if threshold == 0.15:
+                plt.errorbar(avg_std[:, 0], avg_std[:, 1], avg_std[:, 2], avg_std[:, 3],
+                    marker='o', markersize=6, capsize=3, barsabove=False, label=label, zorder=1, color='indigo')
+            else:
+                plt.plot(avg_std[:, 0], avg_std[:, 1], label=label, marker='o', zorder=0, markersize=4, ls='--')
+
+            print('Number of images with no gates detected: {} for threshold: {}'.format(no_gates_count, threshold))
+
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
         plt.grid()
+        plt.legend()
         plt.savefig('roc', bbox_inches='tight')
 
-        print('Number of images with no gates detected: {}'.format(np.sum(x == 0)))
+thresholds = [0.06, 0.1, 0.15, 0.25]
 
 det = detection()
-det.process(None, False)
+det.process(None, thresholds)
 det.plot()

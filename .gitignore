@@ -1,4 +1,5 @@
 results/*.png
+results/*.npy
 WashingtonOBRace
 gen_train_images
 .vscode
