@@ -14,7 +14,8 @@ class detection:
 
 
     def apply_filter(self, img):
-        ''' Filter the sides of the gates and apply it to the image.
+        '''
+        Filter the sides of the gates and apply it to the image.
 
         Args:
             img(Image): the image to filter
@@ -99,8 +100,7 @@ class detection:
         used_right_pillars = []
 
         # Process all detected pillars.
-        for i in range(len(pillars)):
-            leftpillar = pillars[i]
+        for leftpillar in pillars:
             penalties = []
             outer_polygons = []
             inner_polygons = []
@@ -110,9 +110,7 @@ class detection:
             height = topleft[1] - bottomleft[1]
 
             if leftpillar[0]:
-                for j in range(len(pillars)):
-                    rightpillar = pillars[j]
-
+                for j, rightpillar in enumerate(pillars):
                     # Right pillar must not be already used, be a right pillar and
                     # have approximately the same dimensions as the left pillar.
                     if j not in used_right_pillars and \
@@ -183,7 +181,8 @@ class detection:
 
 
     def process(self, img_list=None, thresholds=[0.15]):
-        ''' Process a list of images and output the resulting segmented images.
+        '''
+        Process a list of images and output the resulting segmented images.
 
         Args:
             img_list (list): The images to process. If it is None, all images will be processed
